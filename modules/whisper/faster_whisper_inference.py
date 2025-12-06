@@ -3,7 +3,7 @@ import time
 import huggingface_hub
 import numpy as np
 import torch
-from typing import BinaryIO, Union, Tuple, List, Callable
+from typing import BinaryIO, Union, Tuple, List, Callable, Optional
 import faster_whisper
 from faster_whisper.vad import VadOptions
 import ast
@@ -11,6 +11,7 @@ import ctranslate2
 import whisper
 import gradio as gr
 from argparse import Namespace
+import torchaudio
 
 from modules.utils.paths import (FASTER_WHISPER_MODELS_DIR, DIARIZATION_MODELS_DIR, UVR_MODELS_DIR, OUTPUT_DIR)
 from modules.whisper.data_classes import *
@@ -68,6 +69,16 @@ class FasterWhisperInference(BaseTranscriptionPipeline):
 
         params = WhisperParams.from_list(list(whisper_params))
 
+        # Use code-switching mode if enabled
+        if params.enable_code_switching:
+            return self.transcribe_with_code_switching(
+                audio,
+                params.code_switching_chunk_length,
+                progress,
+                progress_callback,
+                *whisper_params
+            )
+
         if params.model_size != self.current_model_size or self.model is None or self.current_compute_type != params.compute_type:
             self.update_model(params.model_size, params.compute_type, progress)
 
@@ -113,6 +124,127 @@ class FasterWhisperInference(BaseTranscriptionPipeline):
 
         elapsed_time = time.time() - start_time
         return segments_result, elapsed_time
+
+    def transcribe_with_code_switching(self,
+                                       audio: Union[str, BinaryIO, np.ndarray],
+                                       chunk_length: int,
+                                       progress: gr.Progress = gr.Progress(),
+                                       progress_callback: Optional[Callable] = None,
+                                       *whisper_params,
+                                       ) -> Tuple[List[Segment], float]:
+        """
+        Transcribe audio with code-switching support (multiple languages in same audio).
+
+        Parameters
+        ----------
+        audio: Union[str, BinaryIO, np.ndarray]
+            Audio path or file binary or Audio numpy array
+        chunk_length: int
+            Length of each chunk in seconds for language detection
+        progress: gr.Progress
+            Indicator to show progress directly in gradio.
+        progress_callback: Optional[Callable]
+            callback function to show progress.
+        *whisper_params: tuple
+            Parameters related with whisper.
+
+        Returns
+        ----------
+        segments_result: List[Segment]
+            list of Segment that includes start, end timestamps and transcribed text
+        elapsed_time: float
+            elapsed time for transcription
+        """
+        start_time = time.time()
+
+        params = WhisperParams.from_list(list(whisper_params))
+
+        if params.model_size != self.current_model_size or self.model is None or self.current_compute_type != params.compute_type:
+            self.update_model(params.model_size, params.compute_type, progress)
+
+        # Load audio
+        if isinstance(audio, str):
+            audio_tensor, sample_rate = torchaudio.load(audio)
+            audio_np = audio_tensor.numpy().mean(axis=0) if audio_tensor.ndim > 1 else audio_tensor.numpy()[0]
+        elif isinstance(audio, np.ndarray):
+            audio_np = audio
+            sample_rate = 16000  # Whisper expects 16kHz
+        else:
+            raise ValueError("Unsupported audio format")
+
+        # Calculate chunk size in samples
+        chunk_samples = chunk_length * sample_rate
+        total_samples = len(audio_np)
+
+        all_segments = []
+        segment_id_offset = 0
+
+        # Process audio in chunks
+        num_chunks = int(np.ceil(total_samples / chunk_samples))
+
+        for i in range(num_chunks):
+            start_sample = i * chunk_samples
+            end_sample = min((i + 1) * chunk_samples, total_samples)
+            chunk_audio = audio_np[start_sample:end_sample]
+
+            chunk_start_time = start_sample / sample_rate
+
+            progress_n = i / num_chunks
+            progress(progress_n, desc=f"Transcribing chunk {i+1}/{num_chunks} with language detection...")
+            if progress_callback is not None:
+                progress_callback(progress_n)
+
+            # Transcribe chunk with automatic language detection
+            segments, info = self.model.transcribe(
+                audio=chunk_audio,
+                language=None,  # Auto-detect language for each chunk
+                task="translate" if params.is_translate else "transcribe",
+                beam_size=params.beam_size,
+                log_prob_threshold=params.log_prob_threshold,
+                no_speech_threshold=params.no_speech_threshold,
+                best_of=params.best_of,
+                patience=params.patience,
+                temperature=params.temperature,
+                initial_prompt=params.initial_prompt,
+                compression_ratio_threshold=params.compression_ratio_threshold,
+                length_penalty=params.length_penalty,
+                repetition_penalty=params.repetition_penalty,
+                no_repeat_ngram_size=params.no_repeat_ngram_size,
+                prefix=params.prefix,
+                suppress_blank=params.suppress_blank,
+                suppress_tokens=params.suppress_tokens,
+                max_initial_timestamp=params.max_initial_timestamp,
+                word_timestamps=True,
+                prepend_punctuations=params.prepend_punctuations,
+                append_punctuations=params.append_punctuations,
+                max_new_tokens=params.max_new_tokens,
+                hallucination_silence_threshold=params.hallucination_silence_threshold,
+                hotwords=params.hotwords,
+                language_detection_threshold=params.language_detection_threshold,
+                language_detection_segments=params.language_detection_segments,
+                prompt_reset_on_temperature=params.prompt_reset_on_temperature,
+            )
+
+            # Adjust timestamps and collect segments
+            for segment in segments:
+                adjusted_segment = Segment.from_faster_whisper(segment)
+                adjusted_segment.start += chunk_start_time
+                adjusted_segment.end += chunk_start_time
+                adjusted_segment.id = segment_id_offset + (segment.id if segment.id is not None else 0)
+
+                # Adjust word timestamps if present
+                if adjusted_segment.words:
+                    for word in adjusted_segment.words:
+                        if word.start is not None:
+                            word.start += chunk_start_time
+                        if word.end is not None:
+                            word.end += chunk_start_time
+
+                all_segments.append(adjusted_segment)
+                segment_id_offset += 1
+
+        elapsed_time = time.time() - start_time
+        return all_segments, elapsed_time
 
     def update_model(self,
                      model_size: str,

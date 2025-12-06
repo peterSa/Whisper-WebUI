@@ -30,6 +30,8 @@ whisper:
   hotwords: null
   language_detection_threshold: 0.5
   language_detection_segments: 1
+  enable_code_switching: false
+  code_switching_chunk_length: 30
   add_timestamp: false
   enable_offload: true
 

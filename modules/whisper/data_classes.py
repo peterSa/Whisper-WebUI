@@ -334,6 +334,15 @@ class WhisperParams(BaseParams):
         gt=0,
         description="Number of segments for language detection"
     )
+    enable_code_switching: bool = Field(
+        default=False,
+        description="Enable code-switching support for multi-language audio"
+    )
+    code_switching_chunk_length: int = Field(
+        default=30,
+        gt=0,
+        description="Chunk length in seconds for code-switching detection"
+    )
     batch_size: int = Field(default=24, gt=0, description="Batch size for processing")
     enable_offload: bool = Field(
         default=True,
@@ -545,6 +554,18 @@ class WhisperParams(BaseParams):
                                    cls.__fields__["language_detection_segments"].default),
                 precision=0,
                 info="Number of segments for language detection"
+            ),
+            gr.Checkbox(
+                label="Enable Code-Switching",
+                value=defaults.get("enable_code_switching", cls.__fields__["enable_code_switching"].default),
+                info="Enable multi-language support for audio with multiple languages"
+            ),
+            gr.Number(
+                label="Code-Switching Chunk Length (s)",
+                value=defaults.get("code_switching_chunk_length",
+                                   cls.__fields__["code_switching_chunk_length"].default),
+                precision=0,
+                info="Duration of each chunk for language detection in code-switching mode"
             )
         ]
 

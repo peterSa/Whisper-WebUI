@@ -32,6 +32,11 @@ If you wish to try this on Colab, you can do it in [here](https://colab.research
    - To download the pyannote model, you need to have a Huggingface token and manually accept their terms in the pages below.
       1. https://huggingface.co/pyannote/speaker-diarization-3.1
       2. https://huggingface.co/pyannote/segmentation-3.0
+- Code-switching support for multi-language audio
+   - Automatically detect and transcribe audio containing multiple languages
+   - Process audio in chunks with per-segment language detection
+   - Ideal for multilingual conversations, mixed-language content, or code-switching scenarios
+   - Based on the approach discussed in [OpenAI Whisper Discussion #2009](https://github.com/openai/whisper/discussions/2009)
 
 ### Pipeline Diagram
 ![Transcription Pipeline](https://github.com/user-attachments/assets/1d8c63ac-72a4-4a0b-9db0-e03695dcf088)
