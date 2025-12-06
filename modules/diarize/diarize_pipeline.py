@@ -22,11 +22,23 @@ class DiarizationPipeline:
     ):
         if isinstance(device, str):
             device = torch.device(device)
-        self.model = Pipeline.from_pretrained(
-            model_name,
-            use_auth_token=use_auth_token,
-            cache_dir=cache_dir
-        ).to(device)
+
+        # Fix for PyTorch 2.6+ weights_only=True default
+        # Temporarily patch torch.load to use weights_only=False for pyannote models
+        original_torch_load = torch.load
+        def patched_load(*args, **kwargs):
+            kwargs.setdefault('weights_only', False)
+            return original_torch_load(*args, **kwargs)
+
+        torch.load = patched_load
+        try:
+            self.model = Pipeline.from_pretrained(
+                model_name,
+                use_auth_token=use_auth_token,
+                cache_dir=cache_dir
+            ).to(device)
+        finally:
+            torch.load = original_torch_load
 
     def __call__(self, audio: Union[str, np.ndarray], min_speakers=None, max_speakers=None):
         if isinstance(audio, str):
