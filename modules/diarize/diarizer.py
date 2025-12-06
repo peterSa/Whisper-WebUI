@@ -23,6 +23,57 @@ class Diarizer:
         os.makedirs(self.model_dir, exist_ok=True)
         self.pipe = None
 
+    def get_speaker_segments(self,
+                             audio: Union[str, BinaryIO, np.ndarray],
+                             use_auth_token: str,
+                             device: Optional[str] = None
+                             ) -> Tuple[List[dict], float]:
+        """
+        Get speaker segments from audio without requiring transcription.
+        Used for per-speaker language detection mode.
+
+        Parameters
+        ----------
+        audio: Union[str, BinaryIO, np.ndarray]
+            Audio input. This can be file path or binary type.
+        use_auth_token: str
+            Huggingface token with READ permission. This is only needed the first time you download the model.
+            You must manually go to the website https://huggingface.co/pyannote/speaker-diarization-3.1 and agree to their TOS to download the model.
+        device: Optional[str]
+            Device for diarization.
+
+        Returns
+        ----------
+        speaker_segments: List[dict]
+            list of speaker segments with start, end timestamps and speaker label
+        elapsed_time: float
+            elapsed time for running
+        """
+        start_time = time.time()
+
+        if device is None:
+            device = self.device
+
+        if device != self.device or self.pipe is None:
+            self.update_pipe(
+                device=device,
+                use_auth_token=use_auth_token
+            )
+
+        audio = load_audio(audio)
+        diarization_df = self.pipe(audio)
+
+        speaker_segments = []
+        for _, row in diarization_df.iterrows():
+            speaker_segments.append({
+                'start': row['start'],
+                'end': row['end'],
+                'speaker': row['speaker']
+            })
+
+        elapsed_time = time.time() - start_time
+        return speaker_segments, elapsed_time
+
     def run(self,
             audio: Union[str, BinaryIO, np.ndarray],
             transcribed_result: List[Segment],

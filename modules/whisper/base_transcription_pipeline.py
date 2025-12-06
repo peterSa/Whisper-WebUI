@@ -148,56 +148,113 @@ class BaseTranscriptionPipeline(ABC):
 
         origin_audio = deepcopy(audio)
 
-        if vad_params.vad_filter:
-            progress(0, desc="Filtering silent parts from audio..")
-            vad_options = VadOptions(
-                threshold=vad_params.threshold,
-                min_speech_duration_ms=vad_params.min_speech_duration_ms,
-                max_speech_duration_s=vad_params.max_speech_duration_s,
-                min_silence_duration_ms=vad_params.min_silence_duration_ms,
-                speech_pad_ms=vad_params.speech_pad_ms
-            )
-
-            vad_processed, speech_chunks = self.vad.run(
-                audio=audio,
-                vad_parameters=vad_options,
-                progress=progress
-            )
-
-            if vad_processed.size > 0:
-                audio = vad_processed
-            else:
-                vad_params.vad_filter = False
-
-        result, elapsed_time_transcription = self.transcribe(
-            audio,
-            progress,
-            progress_callback,
-            *whisper_params.to_list()
-        )
-        if whisper_params.enable_offload:
-            self.offload()
-
-        if vad_params.vad_filter:
-            restored_result = self.vad.restore_speech_timestamps(
-                segments=result,
-                speech_chunks=speech_chunks,
-            )
-            if restored_result:
-                result = restored_result
-            else:
-                logger.info("VAD detected no speech segments in the audio.")
-
-        if diarization_params.is_diarize:
-            progress(0.99, desc="Diarizing speakers..")
-            result, elapsed_time_diarization = self.diarizer.run(
+        # Per-speaker language detection mode: diarize first, then transcribe each speaker separately
+        if diarization_params.is_diarize and diarization_params.per_speaker_language:
+            progress(0, desc="Detecting speakers..")
+            speaker_segments, elapsed_time_diarization = self.diarizer.get_speaker_segments(
                 audio=origin_audio,
                 use_auth_token=diarization_params.hf_token if diarization_params.hf_token else os.environ.get("HF_TOKEN"),
-                transcribed_result=result,
                 device=diarization_params.diarization_device
             )
+
+            result = []
+            total_segments = len(speaker_segments)
+
+            # Force language to None for automatic detection per segment
+            original_lang = whisper_params.lang
+            whisper_params.lang = None
+
+            for idx, speaker_segment in enumerate(speaker_segments):
+                progress_n = idx / total_segments if total_segments > 0 else 0
+                progress(progress_n, desc=f"Transcribing {speaker_segment['speaker']}..")
+
+                # Extract audio segment for this speaker
+                audio_segment = self.extract_audio_segment(
+                    origin_audio,
+                    speaker_segment['start'],
+                    speaker_segment['end']
+                )
+
+                if audio_segment.size == 0:
+                    continue
+
+                # Transcribe this speaker segment with automatic language detection
+                segment_result, _ = self.transcribe(
+                    audio_segment,
+                    progress,
+                    progress_callback,
+                    *whisper_params.to_list()
+                )
+
+                # Adjust timestamps and add speaker label
+                for seg in segment_result:
+                    if seg.start is not None and seg.end is not None:
+                        seg.start += speaker_segment['start']
+                        seg.end += speaker_segment['start']
+                    if seg.text:
+                        seg.text = f"{speaker_segment['speaker']}|{seg.text.strip()}"
+                    result.append(seg)
+
+            # Restore original language setting
+            whisper_params.lang = original_lang
+
+            if whisper_params.enable_offload:
+                self.offload()
             if diarization_params.enable_offload:
                 self.diarizer.offload()
+
+        # Standard mode: transcribe first, then optionally diarize
+        else:
+            if vad_params.vad_filter:
+                progress(0, desc="Filtering silent parts from audio..")
+                vad_options = VadOptions(
+                    threshold=vad_params.threshold,
+                    min_speech_duration_ms=vad_params.min_speech_duration_ms,
+                    max_speech_duration_s=vad_params.max_speech_duration_s,
+                    min_silence_duration_ms=vad_params.min_silence_duration_ms,
+                    speech_pad_ms=vad_params.speech_pad_ms
+                )
+
+                vad_processed, speech_chunks = self.vad.run(
+                    audio=audio,
+                    vad_parameters=vad_options,
+                    progress=progress
+                )
+
+                if vad_processed.size > 0:
+                    audio = vad_processed
+                else:
+                    vad_params.vad_filter = False
+
+            result, elapsed_time_transcription = self.transcribe(
+                audio,
+                progress,
+                progress_callback,
+                *whisper_params.to_list()
+            )
+            if whisper_params.enable_offload:
+                self.offload()
+
+            if vad_params.vad_filter:
+                restored_result = self.vad.restore_speech_timestamps(
+                    segments=result,
+                    speech_chunks=speech_chunks,
+                )
+                if restored_result:
+                    result = restored_result
+                else:
+                    logger.info("VAD detected no speech segments in the audio.")
+
+            if diarization_params.is_diarize:
+                progress(0.99, desc="Diarizing speakers..")
+                result, elapsed_time_diarization = self.diarizer.run(
+                    audio=origin_audio,
+                    use_auth_token=diarization_params.hf_token if diarization_params.hf_token else os.environ.get("HF_TOKEN"),
+                    transcribed_result=result,
+                    device=diarization_params.diarization_device
+                )
+                if diarization_params.enable_offload:
+                    self.diarizer.offload()
 
         self.cache_parameters(
             params=params,
@@ -605,6 +662,31 @@ class BaseTranscriptionPipeline(ABC):
 
         if cached_yaml is not None and cached_yaml:
             save_yaml(cached_yaml, DEFAULT_PARAMETERS_CONFIG_PATH)
+
+    @staticmethod
+    def extract_audio_segment(audio: np.ndarray, start_time: float, end_time: float, sample_rate: int = 16000) -> np.ndarray:
+        """
+        Extract a segment from audio array based on start and end times.
+
+        Parameters
+        ----------
+        audio: np.ndarray
+            Audio array
+        start_time: float
+            Start time in seconds
+        end_time: float
+            End time in seconds
+        sample_rate: int
+            Sample rate of the audio
+
+        Returns
+        ----------
+        segment: np.ndarray
+            Extracted audio segment
+        """
+        start_sample = int(start_time * sample_rate)
+        end_sample = int(end_time * sample_rate)
+        return audio[start_sample:end_sample]
 
     @staticmethod
     def resample_audio(audio: Union[str, np.ndarray],

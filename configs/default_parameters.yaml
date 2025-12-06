@@ -45,6 +45,7 @@ diarization:
   is_diarize: false
   hf_token: ""
   enable_offload: true
+  per_speaker_language: false
 
 bgm_separation:
   is_separate_bgm: false

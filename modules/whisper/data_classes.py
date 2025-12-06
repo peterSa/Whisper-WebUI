@@ -164,6 +164,10 @@ class DiarizationParams(BaseParams):
         default=True,
         description="Offload Diarization model after Speaker diarization"
     )
+    per_speaker_language: bool = Field(
+        default=False,
+        description="Enable per-speaker language detection. When enabled, diarization runs first and each speaker segment is transcribed separately with automatic language detection."
+    )
 
     @classmethod
     def to_gradio_inputs(cls,
@@ -188,6 +192,11 @@ class DiarizationParams(BaseParams):
             gr.Checkbox(
                 label=_("Offload sub model when finished"),
                 value=defaults.get("enable_offload", cls.__fields__["enable_offload"].default),
+            ),
+            gr.Checkbox(
+                label=_("Per-Speaker Language Detection"),
+                value=defaults.get("per_speaker_language", cls.__fields__["per_speaker_language"].default),
+                info=_("Transcribe each speaker separately with automatic language detection. Useful for multilingual conversations.")
             )
         ]
 
