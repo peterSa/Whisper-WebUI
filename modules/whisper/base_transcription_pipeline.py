@@ -165,6 +165,10 @@ class BaseTranscriptionPipeline(ABC):
             result = []
             total_segments = len(speaker_segments)
 
+            # Offload diarization model immediately to free GPU memory for Whisper
+            if diarization_params.enable_offload:
+                self.diarizer.offload()
+
             # Force language to None for automatic detection per segment
             original_lang = whisper_params.lang
             whisper_params.lang = None
@@ -205,8 +209,6 @@ class BaseTranscriptionPipeline(ABC):
 
             if whisper_params.enable_offload:
                 self.offload()
-            if diarization_params.enable_offload:
-                self.diarizer.offload()
 
         # Standard mode: transcribe first, then optionally diarize
         else:
