@@ -146,6 +146,11 @@ class BaseTranscriptionPipeline(ABC):
                 self.music_separator.offload()
             elapsed_time_bgm_sep = time.time() - start_time
 
+        # Load audio as numpy array if it's a file path
+        from modules.diarize.audio_loader import load_audio
+        if isinstance(audio, str):
+            audio = load_audio(audio)
+
         origin_audio = deepcopy(audio)
 
         # Per-speaker language detection mode: diarize first, then transcribe each speaker separately
