@@ -24,10 +24,11 @@ class DiarizationPipeline:
             device = torch.device(device)
 
         # Fix for PyTorch 2.6+ weights_only=True default
-        # Temporarily patch torch.load to use weights_only=False for pyannote models
+        # Temporarily patch torch.load to FORCE weights_only=False for pyannote models
         original_torch_load = torch.load
         def patched_load(*args, **kwargs):
-            kwargs.setdefault('weights_only', False)
+            # Force weights_only=False (override any existing value)
+            kwargs['weights_only'] = False
             return original_torch_load(*args, **kwargs)
 
         torch.load = patched_load
@@ -51,7 +52,8 @@ class DiarizationPipeline:
         # Fix for PyTorch 2.6+ weights_only=True default during model execution
         original_torch_load = torch.load
         def patched_load(*args, **kwargs):
-            kwargs.setdefault('weights_only', False)
+            # Force weights_only=False (override any existing value)
+            kwargs['weights_only'] = False
             return original_torch_load(*args, **kwargs)
 
         torch.load = patched_load
