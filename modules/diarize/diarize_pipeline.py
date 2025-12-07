@@ -47,11 +47,22 @@ class DiarizationPipeline:
             'waveform': torch.from_numpy(audio[None, :]),
             'sample_rate': SAMPLE_RATE
         }
-        segments = self.model(audio_data, min_speakers=min_speakers, max_speakers=max_speakers)
-        diarize_df = pd.DataFrame(segments.itertracks(yield_label=True), columns=['segment', 'label', 'speaker'])
-        diarize_df['start'] = diarize_df['segment'].apply(lambda x: x.start)
-        diarize_df['end'] = diarize_df['segment'].apply(lambda x: x.end)
-        return diarize_df
+
+        # Fix for PyTorch 2.6+ weights_only=True default during model execution
+        original_torch_load = torch.load
+        def patched_load(*args, **kwargs):
+            kwargs.setdefault('weights_only', False)
+            return original_torch_load(*args, **kwargs)
+
+        torch.load = patched_load
+        try:
+            segments = self.model(audio_data, min_speakers=min_speakers, max_speakers=max_speakers)
+            diarize_df = pd.DataFrame(segments.itertracks(yield_label=True), columns=['segment', 'label', 'speaker'])
+            diarize_df['start'] = diarize_df['segment'].apply(lambda x: x.start)
+            diarize_df['end'] = diarize_df['segment'].apply(lambda x: x.end)
+            return diarize_df
+        finally:
+            torch.load = original_torch_load
 
 
 def assign_word_speakers(diarize_df, transcript_result, fill_nearest=False):
